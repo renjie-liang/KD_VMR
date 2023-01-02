@@ -183,13 +183,48 @@ def localizing_loss(start_logits, end_logits, y1, y2, mask):
     return loss
 
 
-def ans_predictor(start_logits, end_logits, mask):
+def ans_predictor(start_logits, end_logits, mask, name):
+    with tf.compat.v1.variable_scope(name):
+        start_logits = mask_logits(start_logits, mask=mask)
+        end_logits = mask_logits(end_logits, mask=mask)
+        start_prob = tf.nn.softmax(start_logits, axis=1)
+        end_prob = tf.nn.softmax(end_logits, axis=1)
+        outer = tf.matmul(tf.expand_dims(start_prob, axis=2), tf.expand_dims(end_prob, axis=1))
+        outer = tf.linalg.band_part(outer, num_lower=0, num_upper=-1)
+        start_index = tf.argmax(input=tf.reduce_max(input_tensor=outer, axis=2), axis=1)
+        end_index = tf.argmax(input=tf.reduce_max(input_tensor=outer, axis=1), axis=1)
+        return start_index, end_index
+
+
+def my_conv1d(inputs, dim, kernel_size=1, use_bias=False, activation=None, padding='VALID', reuse=None, name='my_conv1d'):
+    """The conv1d here act as a dense layer in default"""
+    with tf.variable_scope(name, reuse=reuse):
+        inputs = tf.transpose(inputs, [0,2,1])
+        shapes = get_shape_list(inputs)
+        kernel = tf.get_variable(name='my_kernel', shape=[kernel_size, shapes[-1], dim], dtype=tf.float32)
+        outputs = tf.nn.conv1d(inputs, filters=kernel, stride=1, padding=padding)
+        if use_bias:
+            bias = tf.get_variable(name='my_bias', shape=[1, 1, dim], dtype=tf.float32, initializer=tf.zeros_initializer())
+            outputs += bias
+        if activation is not None:
+            outputs = activation(outputs)
+        outputs = tf.transpose(outputs, [0,2,1])
+        return outputs
+
+
+def distillation_loss(fast_start_logits, fast_end_logits, start_logits, end_logits, mask, temperature = 1.0):
+    fast_start_logits = mask_logits(fast_start_logits, mask=mask)
+    fast_end_logits = mask_logits(fast_end_logits, mask=mask)
     start_logits = mask_logits(start_logits, mask=mask)
     end_logits = mask_logits(end_logits, mask=mask)
-    start_prob = tf.nn.softmax(start_logits, axis=1)
-    end_prob = tf.nn.softmax(end_logits, axis=1)
-    outer = tf.matmul(tf.expand_dims(start_prob, axis=2), tf.expand_dims(end_prob, axis=1))
-    outer = tf.linalg.band_part(outer, num_lower=0, num_upper=-1)
-    start_index = tf.argmax(input=tf.reduce_max(input_tensor=outer, axis=2), axis=1)
-    end_index = tf.argmax(input=tf.reduce_max(input_tensor=outer, axis=1), axis=1)
-    return start_index, end_index
+
+    # fast_start_logits = tf.nn.softmax(fast_start_logits)
+    # fast_end_logits = tf.nn.softmax(fast_end_logits)
+    start_logits = tf.nn.softmax(start_logits)
+    end_logits = tf.nn.softmax(end_logits)
+
+    start_losses = tf.compat.v1.nn.softmax_cross_entropy_with_logits_v2(logits=fast_start_logits, labels=start_logits)
+    end_losses = tf.compat.v1.nn.softmax_cross_entropy_with_logits_v2(logits=fast_end_logits, labels=end_logits)
+
+    loss = tf.reduce_mean(start_losses + end_losses)
+    return fast_start_logits, fast_end_logits, start_logits, end_logits, loss

@@ -1,6 +1,7 @@
 import tensorflow as tf
 from models.ops import count_params, create_optimizer
 from models.layers import layer_norm, conv1d, cq_attention, cq_concat, matching_loss, localizing_loss, ans_predictor
+from models.layers import distillation_loss
 from models.modules import word_embs, char_embs, add_pos_embs, conv_block, conditioned_predictor, dual_attn_block
 
 
@@ -60,6 +61,20 @@ class SeqPAN:
         qfeats = add_pos_embs(qfeats, max_pos_len=self.configs.max_pos_len, reuse=True, name='pos_emb')
         qfeats = conv_block(qfeats, kernel_size=7, dim=self.configs.dim, num_layers=4, drop_rate=self.drop_rate,
                             activation=tf.nn.relu, reuse=True, name='conv_block')
+
+
+        new_qfeats = tf.reduce_max(qfeats, axis=1, keepdims=True)
+        self.new_qfeats = new_qfeats
+        simple_outputs = tf.multiply(vfeats, new_qfeats)
+        self.simple_outputs = simple_outputs
+        fast_start_logits, fast_end_logits = conditioned_predictor(simple_outputs, dim=self.configs.dim, reuse=False, mask=v_mask,
+                                                         num_heads=self.configs.num_heads, drop_rate=self.drop_rate,
+                                                         attn_drop=self.drop_rate, max_pos_len=self.configs.max_pos_len,
+                                                         activation=tf.nn.relu, name="fast_predictor")
+        self.fast_loc_loss = localizing_loss(fast_start_logits, fast_end_logits, self.y1, self.y2, v_mask)
+        self.fast_start_index, self.fast_end_index = ans_predictor(fast_start_logits, fast_end_logits, v_mask, "fast")
+
+
         # attention block
         for li in range(self.configs.attn_layer):
             vfeats_ = dual_attn_block(vfeats, qfeats, dim=self.configs.dim, num_heads=self.configs.num_heads,
@@ -78,10 +93,7 @@ class SeqPAN:
         fuse_feats = cq_concat(q2v_feats, v2q_feats, pool_mask=q_mask, reuse=False, name='cq_cat')
 
 
-        
         # compute matching loss and matching score
-        # label_embs = tf.get_variable(name='label_emb', shape=[4, self.configs.dim], dtype=tf.float32,
-        #                              trainable=True, initializer=tf.orthogonal_initializer())
         self.match_loss, self.match_scores = matching_loss(fuse_feats, self.match_labels, label_size=4, mask=v_mask,
                                                       gumbel=not self.configs.no_gumbel, tau=self.configs.tau,
                                                       reuse=False)
@@ -109,9 +121,10 @@ class SeqPAN:
         std = tf.math.reduce_variance(self.start_logits) + tf.math.reduce_variance(self.end_logits)
         self.loc_loss = self.loc_loss / std + std
         
-        # compute predicted indexes
-        self.start_index, self.end_index = ans_predictor(self.start_logits, self.end_logits, v_mask)
-        # total loss
-        self.loss = self.loc_loss + self.configs.match_lambda * self.match_loss
+        self.start_index, self.end_index = ans_predictor(self.start_logits, self.end_logits, v_mask, "slow")
+        self.w1, self.w2, self.w3, self.w4, self.distillation_loss = distillation_loss(fast_start_logits, fast_end_logits, self.start_logits, self.end_logits, v_mask, temperature = 1.0)
+        # self.distillation_loss = distillation_loss(fast_start_logits, fast_end_logits, self.start_logits, self.end_logits, v_mask, temperature = 1.0)
+
+        self.loss = self.loc_loss + self.configs.match_lambda * self.match_loss + self.fast_loc_loss + 0.1 * self.distillation_loss 
         # create optimizer
         self.train_op = create_optimizer(self.loss, self.lr, clip_norm=self.configs.clip_norm)

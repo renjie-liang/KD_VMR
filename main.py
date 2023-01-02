@@ -6,8 +6,9 @@ from models.model import SeqPAN
 from utils.data_gen import gen_or_load_dataset
 from utils.data_loader import TrainLoader, TestLoader, TrainNoSuffleLoader
 from utils.data_utils import load_json, save_json, load_video_features
-from utils.runner_utils import eval_test_save, get_feed_dict, write_tf_summary, set_tf_config, eval_test
+from utils.runner_utils import eval_test_save, get_feed_dict, write_tf_summary, set_tf_config, eval_test, eval_test_fast
 from datetime import datetime
+import numpy as np
 
 parser = argparse.ArgumentParser(description='parameters settings')
 # data parameters
@@ -36,9 +37,9 @@ parser.add_argument('--seed', type=int, default=12345, help='random seed')
 parser.add_argument('--mode', type=str, default='train', help='[train | test]')
 parser.add_argument('--epochs', type=int, default=100, help='maximal training epochs')
 parser.add_argument('--num_train_steps', type=int, default=None, help='maximal training steps')
-parser.add_argument('--batch_size', type=int, default=64, help='batch_size')
+parser.add_argument('--batch_size', type=int, default=16, help='batch_size')
 parser.add_argument("--clip_norm", type=float, default=1.0, help="gradient clip norm")
-parser.add_argument("--init_lr", type=float, default=0.0002, help="initial learning rate")
+parser.add_argument("--init_lr", type=float, default=0.0001, help="initial learning rate")
 parser.add_argument('--suffix', type=str, default="", help='saved checkpoint suffix')
 configs = parser.parse_args()
 
@@ -92,6 +93,31 @@ if configs.mode.lower() == 'train':
         sess_config = tf.compat.v1.ConfigProto(allow_soft_placement=True, log_device_placement=False)
         sess_config.gpu_options.allow_growth = True
         with tf.compat.v1.Session(config=sess_config) as sess:
+            
+            # Total_params = 0 
+            # Trainable_params = 0
+            # NonTrainable_params = 0
+            # for var in tf.compat.v1.global_variables():
+            #     shape = var.shape # 获取每个变量的shape，其类型为'tensorflow.python.framework.tensor_shape.TensorShape'
+            #     array = np.asarray([dim for dim in shape]) # 转换为numpy数组，方便后续计算
+            #     mulValue = np.prod(array) # 使用numpy prod接口计算数组所有元素之积
+
+            #     Total_params += mulValue # 总参数量
+            #     if var.trainable:
+            #         Trainable_params += mulValue # 可训练参数量
+            #     else:
+            #         NonTrainable_params += mulValue # 非可训练参数量
+
+            # print(f'Total params: {Total_params}')
+            # print(f'Trainable params: {Trainable_params}')
+            # print(f'Non-trainable params: {NonTrainable_params}')
+            # para_num = sum([np.prod(var.get_shape().as_list()) for var in tf.compat.v1.trainable_variables()])
+            # print(f'params: {para_num}')
+
+            # flops = tf.compat.v1.profiler.profile(graph, options=tf.compat.v1.profiler.ProfileOptionBuilder.float_operation())
+            # print('FLOPs: {}'.format(flops.total_float_ops/1000000000.0))
+
+
             saver = tf.compat.v1.train.Saver(max_to_keep=3)
             # writer = tf.compat.v1.summary.FileWriter(log_dir)
             sess.run(tf.compat.v1.global_variables_initializer())
@@ -109,12 +135,25 @@ if configs.mode.lower() == 'train':
                                  desc='Epoch %d / %d' % (epoch + 1, configs.epochs)):
                     feed_dict = get_feed_dict(data, model, lr=cur_lr, drop_rate=configs.drop_rate, mode='train')
 
-                    _, loss, loc_loss, mat_loss, global_step = sess.run(
+                    # _, tmp = sess.run([model.train_op, model.tmp], feed_dict=feed_dict)
+                    # print(tmp.shape)
+                    _, loss, loc_loss, mat_loss, fast_loc_loss, distillation_loss, global_step = sess.run(
                         [model.train_op, model.loss, model.loc_loss, model.match_loss,
-                         model.global_step], feed_dict=feed_dict)
+                        model.fast_loc_loss, model.distillation_loss, model.global_step],
+                        feed_dict=feed_dict)
+
+
+                    # _, loss, loc_loss, mat_loss, global_step = sess.run(
+                    #     [model.train_op, model.loss, model.loc_loss, model.match_loss, model.global_step],
+                    #     feed_dict=feed_dict)
+
                     if global_step % 100 == 0:
-                        value_pairs = [("train/loss", loss), ("train/loc_loss", loc_loss), ('train/mat_loss', mat_loss)]
+                        # value_pairs = [("train/loss", loss), ("train/loc_loss", loc_loss), ('train/mat_loss', mat_loss)]
                         # write_tf_summary(writer, value_pairs, global_step)
+                        value_pairs = [("loss", loss), ("loc_loss", loc_loss), ('mat_loss', mat_loss),
+                        ("fast_loc_loss", fast_loc_loss),("distillation_loss", distillation_loss)]
+
+
                     if global_step % eval_period == 0:  # evaluation
 
                         # r1i3, r1i5, r1i7, mi, value_pairs, score_str = eval_test(
@@ -126,14 +165,21 @@ if configs.mode.lower() == 'train':
                         #     epoch + 1, global_step, r1i3, r1i5, r1i7, mi), flush=True)
 
 
-
                         r1i3, r1i5, r1i7, mi, value_pairs, score_str = eval_test(
-                            sess=sess, model=model, data_loader=test_loader, epoch=epoch + 1, global_step=global_step)
-                        # write_tf_summary(writer, value_pairs, global_step)
+                            sess=sess, model=model, data_loader=test_loader, epoch=epoch + 1, global_step=global_step, prefix="normal")
                         score_writer.write(score_str)
                         score_writer.flush()
-                        print('\nTEST Epoch: %2d | Step: %5d | r1i3: %.2f | r1i5: %.2f | r1i7: %.2f | mIoU: %.2f' % (
+                        print('\nNormal TEST Epoch: %2d | Step: %5d | r1i3: %.2f | r1i5: %.2f | r1i7: %.2f | mIoU: %.2f' % (
                             epoch + 1, global_step, r1i3, r1i5, r1i7, mi), flush=True)
+
+                        r1i3, r1i5, r1i7, mi, value_pairs, score_str = eval_test_fast(
+                            sess=sess, model=model, data_loader=test_loader, epoch=epoch + 1, global_step=global_step, prefix="fast")
+                        score_writer.write(score_str)
+                        score_writer.flush()
+                        print('\nFast TEST Epoch: %2d | Step: %5d | r1i3: %.2f | r1i5: %.2f | r1i7: %.2f | mIoU: %.2f' % (
+                            epoch + 1, global_step, r1i3, r1i5, r1i7, mi), flush=True)
+
+
                        ## save the model according to the result of Rank@1, IoU=0.7
                         if mi > best_r1i7:
                             best_r1i7 = mi
@@ -157,7 +203,7 @@ elif configs.mode.lower() in ['val', 'test']:
             sess.run(tf.compat.v1.global_variables_initializer())
             saver.restore(sess, tf.train.latest_checkpoint(model_dir))
             # r1i3, r1i5, r1i7, mi, *_ = eval_test(sess=sess, model=model, data_loader=test_loader, mode=configs.mode)
-            r1i3, r1i5, r1i7, mi, *_ = eval_test_save(sess=sess, model=model, data_loader=train_nosuffle_loader, task=configs.task, suffix=configs.suffix, mode=configs.mode)
+            r1i3, r1i5, r1i7, mi, *_ = eval_test_fast(sess=sess, model=model, data_loader=train_nosuffle_loader, task=configs.task, suffix=configs.suffix, mode=configs.mode)
             print("\n" + "\x1b[1;31m" + "Rank@1, IoU=0.3:\t{:.2f}".format(r1i3) + "\x1b[0m", flush=True)
             print("\x1b[1;31m" + "Rank@1, IoU=0.5:\t{:.2f}".format(r1i5) + "\x1b[0m", flush=True)
             print("\x1b[1;31m" + "Rank@1, IoU=0.7:\t{:.2f}".format(r1i7) + "\x1b[0m", flush=True)
