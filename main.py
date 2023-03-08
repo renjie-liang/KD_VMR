@@ -93,30 +93,6 @@ if configs.mode.lower() == 'train':
         sess_config = tf.compat.v1.ConfigProto(allow_soft_placement=True, log_device_placement=False)
         sess_config.gpu_options.allow_growth = True
         with tf.compat.v1.Session(config=sess_config) as sess:
-            
-            # Total_params = 0 
-            # Trainable_params = 0
-            # NonTrainable_params = 0
-            # for var in tf.compat.v1.global_variables():
-            #     shape = var.shape # 获取每个变量的shape，其类型为'tensorflow.python.framework.tensor_shape.TensorShape'
-            #     array = np.asarray([dim for dim in shape]) # 转换为numpy数组，方便后续计算
-            #     mulValue = np.prod(array) # 使用numpy prod接口计算数组所有元素之积
-
-            #     Total_params += mulValue # 总参数量
-            #     if var.trainable:
-            #         Trainable_params += mulValue # 可训练参数量
-            #     else:
-            #         NonTrainable_params += mulValue # 非可训练参数量
-
-            # print(f'Total params: {Total_params}')
-            # print(f'Trainable params: {Trainable_params}')
-            # print(f'Non-trainable params: {NonTrainable_params}')
-            # para_num = sum([np.prod(var.get_shape().as_list()) for var in tf.compat.v1.trainable_variables()])
-            # print(f'params: {para_num}')
-
-            # flops = tf.compat.v1.profiler.profile(graph, options=tf.compat.v1.profiler.ProfileOptionBuilder.float_operation())
-            # print('FLOPs: {}'.format(flops.total_float_ops/1000000000.0))
-
 
             saver = tf.compat.v1.train.Saver(max_to_keep=3)
             # writer = tf.compat.v1.summary.FileWriter(log_dir)
@@ -142,29 +118,12 @@ if configs.mode.lower() == 'train':
                         model.fast_loc_loss, model.distillation_loss, model.global_step],
                         feed_dict=feed_dict)
 
-
-                    # _, loss, loc_loss, mat_loss, global_step = sess.run(
-                    #     [model.train_op, model.loss, model.loc_loss, model.match_loss, model.global_step],
-                    #     feed_dict=feed_dict)
-
                     if global_step % 100 == 0:
-                        # value_pairs = [("train/loss", loss), ("train/loc_loss", loc_loss), ('train/mat_loss', mat_loss)]
-                        # write_tf_summary(writer, value_pairs, global_step)
                         value_pairs = [("loss", loss), ("loc_loss", loc_loss), ('mat_loss', mat_loss),
                         ("fast_loc_loss", fast_loc_loss),("distillation_loss", distillation_loss)]
 
 
                     if global_step % eval_period == 0:  # evaluation
-
-                        # r1i3, r1i5, r1i7, mi, value_pairs, score_str = eval_test(
-                        #     sess=sess, model=model, data_loader=train_nosuffle_loader, epoch=epoch + 1, global_step=global_step)
-                        # write_tf_summary(writer, value_pairs, global_step)
-                        # score_writer.write(score_str)
-                        # score_writer.flush()
-                        # print('\nTRAIN Epoch: %2d | Step: %5d | r1i3: %.2f | r1i5: %.2f | r1i7: %.2f | mIoU: %.2f' % (
-                        #     epoch + 1, global_step, r1i3, r1i5, r1i7, mi), flush=True)
-
-
                         r1i3, r1i5, r1i7, mi, value_pairs, score_str = eval_test(
                             sess=sess, model=model, data_loader=test_loader, epoch=epoch + 1, global_step=global_step, prefix="normal")
                         score_writer.write(score_str)
@@ -172,12 +131,12 @@ if configs.mode.lower() == 'train':
                         print('\nNormal TEST Epoch: %2d | Step: %5d | r1i3: %.2f | r1i5: %.2f | r1i7: %.2f | mIoU: %.2f' % (
                             epoch + 1, global_step, r1i3, r1i5, r1i7, mi), flush=True)
 
-                        r1i3, r1i5, r1i7, mi, value_pairs, score_str = eval_test_fast(
-                            sess=sess, model=model, data_loader=test_loader, epoch=epoch + 1, global_step=global_step, prefix="fast")
-                        score_writer.write(score_str)
-                        score_writer.flush()
-                        print('\nFast TEST Epoch: %2d | Step: %5d | r1i3: %.2f | r1i5: %.2f | r1i7: %.2f | mIoU: %.2f' % (
-                            epoch + 1, global_step, r1i3, r1i5, r1i7, mi), flush=True)
+                        # r1i3, r1i5, r1i7, mi, value_pairs, score_str = eval_test_fast(
+                        #     sess=sess, model=model, data_loader=test_loader, epoch=epoch + 1, global_step=global_step, prefix="fast")
+                        # score_writer.write(score_str)
+                        # score_writer.flush()
+                        # print('\nFast TEST Epoch: %2d | Step: %5d | r1i3: %.2f | r1i5: %.2f | r1i7: %.2f | mIoU: %.2f' % (
+                        #     epoch + 1, global_step, r1i3, r1i5, r1i7, mi), flush=True)
 
 
                        ## save the model according to the result of Rank@1, IoU=0.7
@@ -188,6 +147,7 @@ if configs.mode.lower() == 'train':
             score_writer.close()
 
 elif configs.mode.lower() in ['val', 'test']:
+    print(model_dir)
     if not os.path.exists(model_dir):
         raise ValueError('no pre-trained model exists!!!')
     pre_configs = load_json(os.path.join(model_dir, "configs.json"))
@@ -202,8 +162,9 @@ elif configs.mode.lower() in ['val', 'test']:
             saver = tf.compat.v1.train.Saver()
             sess.run(tf.compat.v1.global_variables_initializer())
             saver.restore(sess, tf.train.latest_checkpoint(model_dir))
-            # r1i3, r1i5, r1i7, mi, *_ = eval_test(sess=sess, model=model, data_loader=test_loader, mode=configs.mode)
-            r1i3, r1i5, r1i7, mi, *_ = eval_test_fast(sess=sess, model=model, data_loader=train_nosuffle_loader, task=configs.task, suffix=configs.suffix, mode=configs.mode)
+            r1i3, r1i5, r1i7, mi, *_ = eval_test(sess=sess, model=model, data_loader=test_loader, mode=configs.mode)
+            # r1i3, r1i5, r1i7, mi, *_ = eval_test_fast(sess=sess, model=model, data_loader=train_nosuffle_loader, task=configs.task, suffix=configs.suffix, mode=configs.mode)
+            # r1i3, r1i5, r1i7, mi, *_ = eval_test_save(sess=sess, model=model, data_loader=train_nosuffle_loader, task=configs.task, suffix=configs.suffix, mode=configs.mode)
             print("\n" + "\x1b[1;31m" + "Rank@1, IoU=0.3:\t{:.2f}".format(r1i3) + "\x1b[0m", flush=True)
             print("\x1b[1;31m" + "Rank@1, IoU=0.5:\t{:.2f}".format(r1i5) + "\x1b[0m", flush=True)
             print("\x1b[1;31m" + "Rank@1, IoU=0.7:\t{:.2f}".format(r1i7) + "\x1b[0m", flush=True)

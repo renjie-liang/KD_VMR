@@ -173,6 +173,8 @@ def eval_test_save(sess, model, data_loader, task, suffix, epoch=None, global_st
     import json
     ious = list()
     save_list = []
+    sampleid = 0
+
     for data in tqdm(data_loader.test_iter(mode), total=data_loader.num_batches(mode), desc="evaluate {}".format(mode)):
         raw_data, feed_dict = get_feed_dict(data, model, mode=mode)
 
@@ -193,15 +195,15 @@ def eval_test_save(sess, model, data_loader, task, suffix, epoch=None, global_st
             ious.append(iou)
 
         for i in range(len(start_indexes)):
-            tmp = {'vid': raw_data[i]["vid"], 
-                #    "duration": raw_data[i]["duration"],
-                #     'psuedo_idx': [raw_data[i]["s_ind"], raw_data[i]["e_ind"]],
-                #    'sentence': " ".join(raw_data[i]["words"]),
-                   'vlen': int(raw_data[i]["v_len"]),
+            tmp = {
+                    'id': sampleid,
+                    'vid': raw_data[i]["vid"], 
+                    'sentence': " ".join(raw_data[i]["words"]),
+                    'vlen': int(raw_data[i]["v_len"]),
                 #    'prop_idx': [int(start_indexes[i]), int(end_indexes[i])],
-                   'prop_logits': [start_logits[i], end_logits[i]],
+                    'logit1d': np.stack([start_logits[i], end_logits[i]]),
             }
-
+            sampleid += 1
             save_list.append(tmp)
     
     os.makedirs("./results/{}".format(task), exist_ok=True)
