@@ -29,13 +29,13 @@ class Processor:
             self.idx_counter += 1
         return results
 
-    def convert(self, data_dir):
+    def convert(self, train_path, test_path):
         self.reset_idx_counter()
-        if not os.path.exists(data_dir):
-            raise ValueError('data dir {} does not exist'.format(data_dir))
+        # if not os.path.exists(data_dir):
+        #     raise ValueError('data dir {} does not exist'.format(data_dir))
         # load raw data
-        train_data = load_json(os.path.join(data_dir, 'train.json'))
-        test_data = load_json(os.path.join(data_dir, 'test.json'))
+        train_data = load_json(train_path)
+        test_data = load_json(test_path)
 
         # process data
         train_set = self.process_data(train_data, scope='train')
@@ -152,38 +152,32 @@ def dataset_gen_active(data, vfeat_lens, word_dict, char_dict, max_pos_len, scop
     return dataset
 
 def gen_or_load_dataset(configs):
-    if not os.path.exists(configs.save_dir):
-        os.makedirs(configs.save_dir)
+    if not os.path.exists(configs.paths.cache_dir):
+        os.makedirs(configs.paths.cache_dir)
 
-    data_dir = os.path.join('data', configs.task + "_" + configs.suffix)
-    print("--"*20)
-    print(data_dir)
-    print("--"*20)
+    # data_dir = os.path.join('data', configs.task + "_" + configs.suffix)
 
-
-
-    save_path = os.path.join(configs.save_dir, '_'.join([configs.task, configs.fv, str(configs.max_pos_len), configs.suffix]) + '.pkl')
+    save_path = os.path.join(configs.paths.cache_dir, '_'.join([configs.task, str(configs.model.vlen), configs.suffix]) + '.pkl')
     if os.path.exists(save_path):
         dataset = load_pickle(save_path)
         return dataset
-    feat_len_path = os.path.join(configs.feature_path, 'feature_shapes.json')
-    emb_path = '/storage_fast/rjliang/glove/glove.840B.300d.txt' 
+    feat_len_path = os.path.join(configs.paths.feature_path, 'feature_shapes.json')
     # load video feature length
     vfeat_lens = load_json(feat_len_path)
     for vid, vfeat_len in vfeat_lens.items():
-        vfeat_lens[vid] = min(configs.max_pos_len, vfeat_len)
+        vfeat_lens[vid] = min(configs.model.vlen, vfeat_len)
         
     # load data
     processor = Processor()
-    train_data, val_data, test_data = processor.convert(data_dir)
+    train_data, val_data, test_data = processor.convert(configs.paths.train_path, configs.paths.test_path)
     # generate dataset
     data_list = [train_data, test_data] if val_data is None else [train_data, val_data, test_data]
-    word_dict, char_dict, vectors = vocab_emb_gen(data_list, emb_path)
-    train_set = dataset_gen(train_data, vfeat_lens, word_dict, char_dict, configs.max_pos_len, 'train')
-    # train_set = dataset_gen_active(train_data, vfeat_lens, word_dict, char_dict, configs.max_pos_len, 'train')
+    word_dict, char_dict, vectors = vocab_emb_gen(data_list, configs.paths.glove_path)
+    train_set = dataset_gen(train_data, vfeat_lens, word_dict, char_dict, configs.model.vlen, 'train')
+    # train_set = dataset_gen_active(train_data, vfeat_lens, word_dict, char_dict, configs.model.vlen, 'train')
     val_set = None if val_data is None else dataset_gen(val_data, vfeat_lens, word_dict, char_dict,
-                                                        configs.max_pos_len, 'val')
-    test_set = dataset_gen(test_data, vfeat_lens, word_dict, char_dict, configs.max_pos_len, 'test')
+                                                        configs.model.vlen, 'val')
+    test_set = dataset_gen(test_data, vfeat_lens, word_dict, char_dict, configs.model.vlen, 'test')
     # save dataset
     n_val = 0 if val_set is None else len(val_set)
     dataset = {'train_set': train_set, 'val_set': val_set, 'test_set': test_set, 'word_dict': word_dict,

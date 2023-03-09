@@ -9,7 +9,7 @@ class TrainLoader:
         super(TrainLoader, self).__init__()
         self.dataset = dataset
         self.visual_feats = visual_features
-        self.batch_size = configs.batch_size
+        self.batch_size = configs.train.batch_size
 
     def set_batch_size(self, batch_size):
         self.batch_size = batch_size
@@ -100,7 +100,7 @@ class TestLoader:
         self.visual_feats = visual_features
         self.val_set = None if datasets['val_set'] is None else datasets['val_set']
         self.test_set = datasets['test_set']
-        self.batch_size = configs.batch_size
+        self.batch_size = configs.train.batch_size
 
     def set_batch_size(self, batch_size):
         self.batch_size = batch_size
@@ -166,7 +166,7 @@ class TrainNoSuffleLoader:
         self.visual_feats = visual_features
         self.val_set = None
         self.test_set = datasets
-        self.batch_size = configs.batch_size
+        self.batch_size = configs.train.batch_size
 
     def set_batch_size(self, batch_size):
         self.batch_size = batch_size

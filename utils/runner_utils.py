@@ -65,6 +65,21 @@ def get_feed_dict(batch_data, model, lr=None, drop_rate=None, mode='train'):
                      model.char_ids: char_ids}
         return raw_data, feed_dict
 
+def get_feed_dict_MultiTeacher(batch_data, model, lr=None, drop_rate=None, mode='train'):
+    if mode == 'train':  # training
+        (_, vfeats, vfeat_lens, word_ids, char_ids, s_labels, e_labels, match_labels) = batch_data
+        # plot_se_label(s_labels, e_labels, match_labels)
+        feed_dict = {model.video_inputs: vfeats, model.video_seq_len: vfeat_lens, model.word_ids: word_ids,
+                     model.char_ids: char_ids, model.y1: s_labels, model.y2: e_labels, model.lr: lr,
+                     model.match_labels: match_labels, model.drop_rate: drop_rate}
+        return feed_dict
+    else:  # eval
+        raw_data, vfeats, vfeat_lens, word_ids, char_ids = batch_data
+        feed_dict = {model.video_inputs: vfeats, model.video_seq_len: vfeat_lens, model.word_ids: word_ids,
+                     model.char_ids: char_ids}
+        return raw_data, feed_dict
+
+
 
 def eval_test(sess, model, data_loader, epoch=None, global_step=None, mode="test", prefix=""):
     ious = list()
