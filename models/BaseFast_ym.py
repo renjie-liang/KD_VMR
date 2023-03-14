@@ -53,29 +53,17 @@ class BaseFast:
         vfeats = conv1d(vfeats, dim=self.configs.model.dim, use_bias=True, reuse=False, name='video_conv1d')
         vfeats = layer_norm(vfeats, reuse=False, name='v_layer_norm') # # (16, 64, 300)
 
-
         # add positional embedding and convolutional block
-        vfeats = add_pos_embs(vfeats, max_pos_len=self.configs.model.vlen, reuse=False, name='pos_emb')
+        vfeats = add_pos_embs(vfeats, max_pos_len=self.configs.model.max_vlen, reuse=False, name='pos_emb')
         vfeats = conv_block(vfeats, kernel_size=7, dim=self.configs.model.dim, num_layers=4, drop_rate=self.drop_rate,
                             activation=tf.nn.relu, reuse=False, name='conv_block')
-        qfeats = add_pos_embs(qfeats, max_pos_len=self.configs.model.vlen, reuse=True, name='pos_emb')
+        qfeats = add_pos_embs(qfeats, max_pos_len=self.configs.model.max_vlen, reuse=True, name='pos_emb')
         qfeats = conv_block(qfeats, kernel_size=7, dim=self.configs.model.dim, num_layers=4, drop_rate=self.drop_rate,
                             activation=tf.nn.relu, reuse=True, name='conv_block')
 
-
         new_qfeats = tf.reduce_max(qfeats, axis=1, keepdims=True)
         self.new_qfeats = new_qfeats
-        simple_outputs = tf.multiply(vfeats, new_qfeats)
-        self.simple_outputs = simple_outputs
-        fast_start_logits, fast_end_logits = conditioned_predictor(simple_outputs, dim=self.configs.model.dim, reuse=False, mask=v_mask,
-                                                         num_heads=self.configs.model.num_heads, drop_rate=self.drop_rate,
-                                                         attn_drop=self.drop_rate, max_pos_len=self.configs.model.vlen,
-                                                         activation=tf.nn.relu, name="fast_predictor")
-        self.fast_loc_loss = localizing_loss(fast_start_logits, fast_end_logits, self.y1, self.y2, v_mask)
-        self.start_index, self.end_index = ans_predictor(fast_start_logits, fast_end_logits, v_mask, "fast")
-        self.loss = self.fast_loc_loss
-        # create optimizer
-        self.train_op = create_optimizer(self.loss, self.lr, clip_norm=self.configs.train.clip_norm)
+        fuse_feats = tf.multiply(vfeats, new_qfeats)
 
 
         # # attention block
@@ -96,38 +84,34 @@ class BaseFast:
         # fuse_feats = cq_concat(q2v_feats, v2q_feats, pool_mask=q_mask, reuse=False, name='cq_cat')
 
 
-        # # compute matching loss and matching score
-        # self.match_loss, self.match_scores = matching_loss(fuse_feats, self.match_labels, label_size=4, mask=v_mask,
-        #                                               gumbel=not self.configs.loss.no_gumbel, tau=self.configs.loss.tau,
-        #                                               reuse=False)
+        # compute matching loss and matching score
+        self.match_loss, self.match_scores = matching_loss(fuse_feats, self.match_labels, label_size=4, mask=v_mask,
+                                                      gumbel=not self.configs.loss.no_gumbel, tau=self.configs.loss.tau,
+                                                      reuse=False)
 
-        # label_embs = tf.compat.v1.get_variable(name='label_emb', shape=[4, self.configs.model.dim], dtype=tf.float32,
-        #                              trainable=True, initializer=tf.compat.v1.orthogonal_initializer())
-        # ortho_constraint = tf.multiply(tf.matmul(label_embs, label_embs, transpose_b=True),
-        #                                1.0 - tf.eye(4, dtype=tf.float32))
-        # ortho_constraint = tf.norm(tensor=ortho_constraint, ord=2)  # compute l2 norm as loss
-        # self.match_loss += ortho_constraint
-
+        label_embs = tf.compat.v1.get_variable(name='label_emb', shape=[4, self.configs.model.dim], dtype=tf.float32,
+                                     trainable=True, initializer=tf.compat.v1.orthogonal_initializer())
+        ortho_constraint = tf.multiply(tf.matmul(label_embs, label_embs, transpose_b=True),
+                                       1.0 - tf.eye(4, dtype=tf.float32))
+        ortho_constraint = tf.norm(tensor=ortho_constraint, ord=2)  # compute l2 norm as loss
+        self.match_loss += ortho_constraint
 
         
-        # soft_label_embs = tf.matmul(self.match_scores, tf.tile(tf.expand_dims(label_embs, axis=0),
-        #                                                   multiples=[tf.shape(input=self.match_scores)[0], 1, 1]))
-        # outputs = (fuse_feats + soft_label_embs) * tf.cast(tf.expand_dims(v_mask, axis=-1), dtype=tf.float32)
-        # # compute start and end logits
-        # self.start_logits, self.end_logits = conditioned_predictor(outputs, dim=self.configs.model.dim, reuse=False, mask=v_mask,
-        #                                                  num_heads=self.configs.model.num_heads, drop_rate=self.drop_rate,
-        #                                                  attn_drop=self.drop_rate, max_pos_len=self.configs.model.vlen,
-        #                                                  activation=tf.nn.relu, name="predictor")
+        soft_label_embs = tf.matmul(self.match_scores, tf.tile(tf.expand_dims(label_embs, axis=0),
+                                                          multiples=[tf.shape(input=self.match_scores)[0], 1, 1]))
+        outputs = (fuse_feats + soft_label_embs) * tf.cast(tf.expand_dims(v_mask, axis=-1), dtype=tf.float32)
+        # compute start and end logits
+        self.start_logits, self.end_logits = conditioned_predictor(outputs, dim=self.configs.model.dim, reuse=False, mask=v_mask,
+                                                         num_heads=self.configs.model.num_heads, drop_rate=self.drop_rate,
+                                                         attn_drop=self.drop_rate, max_pos_len=self.configs.model.max_vlen,
+                                                         activation=tf.nn.relu, name="predictor")
 
         # compute localization loss
-        # self.loc_loss = localizing_loss(self.start_logits, self.end_logits, self.y1, self.y2, v_mask)
+        self.loc_loss = localizing_loss(self.start_logits, self.end_logits, self.y1, self.y2, v_mask)
         # std = tf.math.reduce_variance(self.start_logits) + tf.math.reduce_variance(self.end_logits)
         # self.loc_loss = self.loc_loss / std + std
         
-        # self.start_index, self.end_index = ans_predictor(self.start_logits, self.end_logits, v_mask, "slow")
-        # self.w1, self.w2, self.w3, self.w4, self.distillation_loss = distillation_loss(fast_start_logits, fast_end_logits, self.start_logits, self.end_logits, v_mask, temperature = 1.0)
-        # self.distillation_loss = distillation_loss(fast_start_logits, fast_end_logits, self.start_logits, self.end_logits, v_mask, temperature = 1.0)
-
-        # self.loss = self.loc_loss + self.configs.loss.match_lambda * self.match_loss + self.fast_loc_loss + 0.1 * self.distillation_loss 
-        # # create optimizer
-        # self.train_op = create_optimizer(self.loss, self.lr, clip_norm=self.configs.train.clip_norm)
+        self.start_index, self.end_index = ans_predictor(self.start_logits, self.end_logits, v_mask, "slow")
+        self.loss = self.loc_loss + self.configs.loss.match_lambda * self.match_loss
+        # create optimizer
+        self.train_op = create_optimizer(self.loss, self.lr, clip_norm=self.configs.train.clip_norm)

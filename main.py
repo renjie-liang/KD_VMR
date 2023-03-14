@@ -5,11 +5,13 @@ from tqdm import tqdm
 from models.SeqPAN import SeqPAN
 from models.BaseFast import BaseFast
 from models.SingleTeacher import SingleTeacher
+from models.MultiTeacher import MultiTeacher
 
 from utils.data_gen import gen_or_load_dataset
-from utils.data_loader import TrainLoader, TestLoader, TrainNoSuffleLoader
+from utils.data_loader import TrainLoader, TestLoader, TrainNoSuffleLoader, TrainLoaderMultiTeacher
 from utils.data_utils import load_json, save_json, load_video_features
-from utils.runner_utils import eval_test_save, get_feed_dict, write_tf_summary, set_tf_config, eval_test, eval_test_fast
+from utils.runner_utils import eval_test_save, get_feed_dict, get_feed_dict_MultiTeacher
+from utils.runner_utils import write_tf_summary, set_tf_config, eval_test, eval_test_fast
 from datetime import datetime
 import numpy as np
 from easydict import EasyDict
@@ -31,18 +33,25 @@ args = parse_args()
 configs = EasyDict(load_yaml(args.config))
 configs['suffix'] = args.suffix
 
+if configs.model.name == "MultiTeacher":
+    feed_func = get_feed_dict_MultiTeacher
+    trainloader_func = TrainLoaderMultiTeacher
+else:
+    feed_func = get_feed_dict
+    trainloader_func = TrainLoader
+    
 # prepare or load dataset
 dataset = gen_or_load_dataset(configs)
 configs.num_chars = dataset['n_chars']
 configs.num_words = dataset['n_words']
 
 # get train and test loader
-visual_features = load_video_features(configs.paths.feature_path, configs.model.vlen)
-train_loader = TrainLoader(dataset=dataset['train_set'], visual_features=visual_features, configs=configs)
+visual_features = load_video_features(configs.paths.feature_path, configs.model.max_vlen)
+train_loader = trainloader_func(dataset=dataset['train_set'], visual_features=visual_features, configs=configs)
 test_loader = TestLoader(datasets=dataset, visual_features=visual_features, configs=configs)
-train_nosuffle_loader = TrainNoSuffleLoader(datasets=dataset['train_set'], visual_features=visual_features, configs=configs)
+# train_nosuffle_loader = TrainNoSuffleLoader(datasets=dataset['train_set'], visual_features=visual_features, configs=configs)
 
-home_dir = 'ckpt/{}/model_{}'.format(configs.task, str(configs.model.vlen))
+home_dir = 'ckpt/{}/model_{}'.format(configs.task, str(configs.model.max_vlen))
 if configs.suffix is not None:
     home_dir += '_' + configs.suffix
 model_dir = os.path.join(home_dir, "model")
@@ -56,6 +65,7 @@ if not args.eval:
     # write configs to json file
     save_json(vars(configs), filename=os.path.join(model_dir, "configs.json"), save_pretty=True)
     # create model and train
+
     with tf.Graph().as_default() as graph:
         model = eval(configs.model.name)(configs=configs, graph=graph, word_vectors=dataset['word_vector'])
         sess_config = tf.compat.v1.ConfigProto(allow_soft_placement=True, log_device_placement=False)
@@ -77,10 +87,17 @@ if not args.eval:
 
                 for data in tqdm(train_loader.batch_iter(), total=train_loader.num_batches(),
                                  desc='Epoch %d / %d' % (epoch + 1, configs.train.epochs)):
-                    feed_dict = get_feed_dict(data, model, lr=cur_lr, drop_rate=configs.model.droprate, mode='train')
+                    feed_dict = feed_func(data, model, lr=cur_lr, drop_rate=configs.model.droprate, mode='train')
 
                     # _, tmp = sess.run([model.train_op, model.tmp], feed_dict=feed_dict)
-                    # print(tmp.shape)
+                    # print(tmp)
+                    # _, tmp, tmp0, tmp1, tmp2 = sess.run([model.train_op, model.tmp, model.tmp0, model.tmp1, model.tmp2], feed_dict=feed_dict)
+                    # # print(tmp.shape)
+                    # print(tmp.min(), tmp.max())
+                    # print(tmp0.min(), tmp0.max())
+                    # print(tmp1.min(), tmp1.max())
+                    # print(tmp2.min(), tmp2.max())
+
                     _, loss,  global_step = sess.run([model.train_op, model.loss, model.global_step], feed_dict=feed_dict)
 
                     if global_step % eval_period == 0:  # evaluation
@@ -123,8 +140,8 @@ else:
             sess.run(tf.compat.v1.global_variables_initializer())
             saver.restore(sess, tf.train.latest_checkpoint(model_dir))
             r1i3, r1i5, r1i7, mi, *_ = eval_test(sess=sess, model=model, data_loader=test_loader, mode=configs.mode)
-            # r1i3, r1i5, r1i7, mi, *_ = eval_test_fast(sess=sess, model=model, data_loader=train_nosuffle_loader, task=configs.task, suffix=configs.suffix, mode=configs.mode)
-            # r1i3, r1i5, r1i7, mi, *_ = eval_test_save(sess=sess, model=model, data_loader=train_nosuffle_loader, task=configs.task, suffix=configs.suffix, mode=configs.mode)
+            r1i3, r1i5, r1i7, mi, *_ = eval_test_fast(sess=sess, model=model, data_loader=train_nosuffle_loader, task=configs.task, suffix=configs.suffix, mode=configs.mode)
+            r1i3, r1i5, r1i7, mi, *_ = eval_test_save(sess=sess, model=model, data_loader=train_nosuffle_loader, task=configs.task, suffix=configs.suffix, mode=configs.mode)
             print("\n" + "\x1b[1;31m" + "Rank@1, IoU=0.3:\t{:.2f}".format(r1i3) + "\x1b[0m", flush=True)
             print("\x1b[1;31m" + "Rank@1, IoU=0.5:\t{:.2f}".format(r1i5) + "\x1b[0m", flush=True)
             print("\x1b[1;31m" + "Rank@1, IoU=0.7:\t{:.2f}".format(r1i7) + "\x1b[0m", flush=True)

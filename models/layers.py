@@ -212,19 +212,32 @@ def my_conv1d(inputs, dim, kernel_size=1, use_bias=False, activation=None, paddi
         return outputs
 
 
-def distillation_loss(fast_start_logits, fast_end_logits, start_logits, end_logits, mask, temperature = 1.0):
-    fast_start_logits = mask_logits(fast_start_logits, mask=mask)
-    fast_end_logits = mask_logits(fast_end_logits, mask=mask)
-    start_logits = mask_logits(start_logits, mask=mask)
-    end_logits = mask_logits(end_logits, mask=mask)
+def distillation_loss(slogit_s, elogit_s, slogit_t, elogit_t, mask, temperature):
+    # slogit_s = mask_logits(slogit_s, mask=mask)
+    # elogit_s = mask_logits(elogit_s, mask=mask)
+    # slogit_t = mask_logits(slogit_t, mask=mask)
+    # elogit_t = mask_logits(elogit_t, mask=mask)
 
-    # fast_start_logits = tf.nn.softmax(fast_start_logits)
-    # fast_end_logits = tf.nn.softmax(fast_end_logits)
-    start_logits = tf.nn.softmax(start_logits)
-    end_logits = tf.nn.softmax(end_logits)
 
-    start_losses = tf.compat.v1.nn.softmax_cross_entropy_with_logits_v2(logits=fast_start_logits, labels=start_logits)
-    end_losses = tf.compat.v1.nn.softmax_cross_entropy_with_logits_v2(logits=fast_end_logits, labels=end_logits)
 
-    loss = tf.reduce_mean(start_losses + end_losses)
-    return fast_start_logits, fast_end_logits, start_logits, end_logits, loss
+    slogit_s = tf.sigmoid(slogit_s)
+    slogit_s = tf.sigmoid(elogit_s)
+    # slogit_s = tf.nn.softmax(tf.linalg.normalize(slogit_s, axis=1)[0] / temperature, axis=1)
+    # elogit_s = tf.nn.softmax(tf.linalg.normalize(elogit_s, axis=1)[0] / temperature, axis=1)
+
+
+    slogit_t = tf.nn.softmax(tf.linalg.normalize(slogit_t, axis=1)[0] / temperature, axis=1)
+    elogit_t = tf.nn.softmax(tf.linalg.normalize(elogit_t, axis=1)[0] / temperature, axis=1)
+
+    slogit_t, elogit_t = tf.stop_gradient(slogit_t), tf.stop_gradient(elogit_t)
+    sloss = tf.compat.v1.nn.softmax_cross_entropy_with_logits_v2(labels=slogit_t, logits=slogit_s)
+    eloss = tf.compat.v1.nn.softmax_cross_entropy_with_logits_v2(labels=elogit_t, logits=elogit_s)
+    loss = tf.reduce_mean(sloss + eloss)
+    return loss
+
+
+
+    # sloss = tf.nn.l2_loss(slogit_s - slogit_t)
+    # eloss = tf.nn.l2_loss(elogit_s - elogit_t)
+    # sloss = tf.compat.v1.distributions.kl_divergence(slogit_s, slogit_t)
+    # eloss = tf.compat.v1.distributions.kl_divergence(elogit_s, elogit_t)

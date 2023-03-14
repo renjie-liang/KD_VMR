@@ -55,10 +55,10 @@ class SeqPAN:
 
 
         # add positional embedding and convolutional block
-        vfeats = add_pos_embs(vfeats, max_pos_len=self.configs.model.vlen, reuse=False, name='pos_emb')
+        vfeats = add_pos_embs(vfeats, max_pos_len=self.configs.model.max_vlen, reuse=False, name='pos_emb')
         vfeats = conv_block(vfeats, kernel_size=7, dim=self.configs.model.dim, num_layers=4, drop_rate=self.drop_rate,
                             activation=tf.nn.relu, reuse=False, name='conv_block')
-        qfeats = add_pos_embs(qfeats, max_pos_len=self.configs.model.vlen, reuse=True, name='pos_emb')
+        qfeats = add_pos_embs(qfeats, max_pos_len=self.configs.model.max_vlen, reuse=True, name='pos_emb')
         qfeats = conv_block(qfeats, kernel_size=7, dim=self.configs.model.dim, num_layers=4, drop_rate=self.drop_rate,
                             activation=tf.nn.relu, reuse=True, name='conv_block')
 
@@ -102,12 +102,12 @@ class SeqPAN:
         # compute start and end logits
         self.start_logits, self.end_logits = conditioned_predictor(outputs, dim=self.configs.model.dim, reuse=False, mask=v_mask,
                                                          num_heads=self.configs.model.num_heads, drop_rate=self.drop_rate,
-                                                         attn_drop=self.drop_rate, max_pos_len=self.configs.model.vlen,
+                                                         attn_drop=self.drop_rate, max_pos_len=self.configs.model.max_vlen,
                                                          activation=tf.nn.relu, name="predictor")
 
         # compute localization loss
         self.loc_loss = localizing_loss(self.start_logits, self.end_logits, self.y1, self.y2, v_mask)
-        std = tf.math.reduce_variance(self.start_logits) + tf.math.reduce_variance(self.end_logits)
+        # std = tf.math.reduce_variance(self.start_logits) + tf.math.reduce_variance(self.end_logits)
         # self.loc_loss = self.loc_loss / std + std
         
         self.start_index, self.end_index = ans_predictor(self.start_logits, self.end_logits, v_mask, "slow")

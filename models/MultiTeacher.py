@@ -30,15 +30,18 @@ class MultiTeacher:
         # hyper-parameters
         self.drop_rate = tf.compat.v1.placeholder_with_default(input=0.0, shape=[], name='dropout_rate')
         self.lr = tf.compat.v1.placeholder(dtype=tf.float32, name='learning_rate')
-        self.t0_logits = tf.compat.v1.placeholder(dtype=tf.float32, shape=[None, None], name='t0_logits')
-        self.t1_logits = tf.compat.v1.placeholder(dtype=tf.float32, shape=[None, None], name='t1_logits')
-        self.t2_logits = tf.compat.v1.placeholder(dtype=tf.float32, shape=[None, None], name='t2_logits')
+        self.slabels_t0 = tf.compat.v1.placeholder(dtype=tf.float32, shape=[None, None], name='slabels_t0')
+        self.slabels_t1 = tf.compat.v1.placeholder(dtype=tf.float32, shape=[None, None], name='slabels_t1')
+        self.slabels_t2 = tf.compat.v1.placeholder(dtype=tf.float32, shape=[None, None], name='slabels_t2')
+        self.elabels_t0 = tf.compat.v1.placeholder(dtype=tf.float32, shape=[None, None], name='elabels_t0')
+        self.elabels_t1 = tf.compat.v1.placeholder(dtype=tf.float32, shape=[None, None], name='elabels_t1')
+        self.elabels_t2 = tf.compat.v1.placeholder(dtype=tf.float32, shape=[None, None], name='elabels_t2')
+
 
     def _build_model(self, word_vectors):
         # create mask for both visual and textual features
         v_mask = tf.sequence_mask(lengths=self.video_seq_len, maxlen=tf.reduce_max(input_tensor=self.video_seq_len), dtype=tf.int32) #(16, 64)
         q_mask = tf.cast(tf.cast(self.word_ids, dtype=tf.bool), dtype=tf.int32) #(16, 11)
-
 
         # text_encoder:: generate query features
         word_emb = word_embs(self.word_ids, dim=self.configs.model.word_dim, drop_rate=self.drop_rate, finetune=False,
@@ -58,10 +61,10 @@ class MultiTeacher:
 
 
         # add positional embedding and convolutional block
-        vfeats = add_pos_embs(vfeats, max_pos_len=self.configs.model.vlen, reuse=False, name='pos_emb')
+        vfeats = add_pos_embs(vfeats, max_pos_len=self.configs.model.max_vlen, reuse=False, name='pos_emb')
         vfeats = conv_block(vfeats, kernel_size=7, dim=self.configs.model.dim, num_layers=4, drop_rate=self.drop_rate,
                             activation=tf.nn.relu, reuse=False, name='conv_block')
-        qfeats = add_pos_embs(qfeats, max_pos_len=self.configs.model.vlen, reuse=True, name='pos_emb')
+        qfeats = add_pos_embs(qfeats, max_pos_len=self.configs.model.max_vlen, reuse=True, name='pos_emb')
         qfeats = conv_block(qfeats, kernel_size=7, dim=self.configs.model.dim, num_layers=4, drop_rate=self.drop_rate,
                             activation=tf.nn.relu, reuse=True, name='conv_block')
 
@@ -105,15 +108,27 @@ class MultiTeacher:
         # compute start and end logits
         self.start_logits, self.end_logits = conditioned_predictor(outputs, dim=self.configs.model.dim, reuse=False, mask=v_mask,
                                                          num_heads=self.configs.model.num_heads, drop_rate=self.drop_rate,
-                                                         attn_drop=self.drop_rate, max_pos_len=self.configs.model.vlen,
+                                                         attn_drop=self.drop_rate, max_pos_len=self.configs.model.max_vlen,
                                                          activation=tf.nn.relu, name="predictor")
 
         # compute localization loss
-        self.loc_loss = localizing_loss(self.start_logits, self.end_logits, self.y1, self.y2, v_mask)
-        std = tf.math.reduce_variance(self.start_logits) + tf.math.reduce_variance(self.end_logits)
+        # std = tf.math.reduce_variance(self.start_logits) + tf.math.reduce_variance(self.end_logits)
         # self.loc_loss = self.loc_loss / std + std
-        
         self.start_index, self.end_index = ans_predictor(self.start_logits, self.end_logits, v_mask, "slow")
-        self.loss = self.loc_loss + self.configs.loss.match_lambda * self.match_loss
+        
+        
+
+        self.loc_loss = localizing_loss(self.start_logits, self.end_logits, self.y1, self.y2, v_mask)
+
+        # kdloss_t0 = distillation_loss(self.start_logits, self.end_logits, self.slabels_t0, self.elabels_t0, v_mask, self.configs.loss.t0_temperature)
+        kdloss_t0 = distillation_loss(self.start_logits, self.end_logits, self.slabels_t0, self.elabels_t0, v_mask, self.configs.loss.t0_temperature)
+        kdloss_t1 = distillation_loss(self.start_logits, self.end_logits, self.slabels_t1, self.elabels_t1, v_mask, self.configs.loss.t0_temperature)
+        kdloss_t2 = distillation_loss(self.start_logits, self.end_logits, self.slabels_t2, self.elabels_t2, v_mask, self.configs.loss.t0_temperature)
+
+
+        self.loss = self.loc_loss + self.configs.loss.match_lambda * self.match_loss \
+                    + self.configs.loss.t0_cof * kdloss_t0 \
+                    + self.configs.loss.t1_cof * kdloss_t1 \
+                    + self.configs.loss.t2_cof * kdloss_t2
         # create optimizer
         self.train_op = create_optimizer(self.loss, self.lr, clip_norm=self.configs.train.clip_norm)

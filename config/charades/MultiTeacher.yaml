@@ -17,8 +17,8 @@
   },
   "model": {
         name: "MultiTeacher",
-        vlen: 64,
-        tlen: 64,
+        max_vlen: 64,
+        max_tlen: 20,
         vdim: 1024,
         dim: 128,
         num_heads: 8,
@@ -31,15 +31,15 @@
     {   match_lambda: 1.0, 
         tau: 0.3,
         no_gumbel: true,
-
+        
         t0_path: "./results/charades_BAN_train_logits.pkl",
         t0_cof: 1.0,
-        t0_temperature: 3,
+        t0_temperature: 3.0,
         t1_path: "./results/charades_EMAT_train_logits.pkl",
         t1_cof: 1.0,
-        t1_temperature: 3,
+        t1_temperature: 3.0,
         t2_path: "./results/charades_SeqPAN_train_logits.pkl",
-        t2_cof: 0.0,
-        t2_temperature: 3
+        t2_cof: 1.0,
+        t2_temperature: 3.0
     }
 }

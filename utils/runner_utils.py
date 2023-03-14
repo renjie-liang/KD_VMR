@@ -67,11 +67,14 @@ def get_feed_dict(batch_data, model, lr=None, drop_rate=None, mode='train'):
 
 def get_feed_dict_MultiTeacher(batch_data, model, lr=None, drop_rate=None, mode='train'):
     if mode == 'train':  # training
-        (_, vfeats, vfeat_lens, word_ids, char_ids, s_labels, e_labels, match_labels) = batch_data
+        (_, vfeats, vfeat_lens, word_ids, char_ids, s_labels, e_labels, match_labels, \
+         slabels_t0, slabels_t1, slabels_t2, elabels_t0, elabels_t1, elabels_t2) = batch_data
         # plot_se_label(s_labels, e_labels, match_labels)
         feed_dict = {model.video_inputs: vfeats, model.video_seq_len: vfeat_lens, model.word_ids: word_ids,
                      model.char_ids: char_ids, model.y1: s_labels, model.y2: e_labels, model.lr: lr,
-                     model.match_labels: match_labels, model.drop_rate: drop_rate}
+                     model.match_labels: match_labels, model.drop_rate: drop_rate,
+                     model.slabels_t0: slabels_t0, model.slabels_t1: slabels_t1, model.slabels_t2: slabels_t2,
+                     model.elabels_t0: elabels_t0, model.elabels_t1: elabels_t1, model.elabels_t2: elabels_t2}
         return feed_dict
     else:  # eval
         raw_data, vfeats, vfeat_lens, word_ids, char_ids = batch_data
