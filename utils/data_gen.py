@@ -7,7 +7,6 @@ from nltk.tokenize import word_tokenize
 from utils.data_utils import load_json, load_lines, load_pickle, save_pickle, time_to_index
 
 PAD, UNK = "<PAD>", "<UNK>"
-
 def load_teacher_logist(output, i, vid):
     vid_t, logit = output[i]
     assert vid_t == vid, "{} {}".format(vid_t, vid)
@@ -18,7 +17,7 @@ def dataConvert(configs):
     train_data = load_json(configs.paths.train_path)
     test_data = load_json(configs.paths.test_path)
 
-    if configs.model.name == "MultiTeacher":
+    if configs.model.name.startswith("MultiTeacher"):
         t0_output = load_pickle(configs.loss.t0_path)
         t1_output = load_pickle(configs.loss.t1_path)
         t2_output = load_pickle(configs.loss.t2_path)
@@ -33,7 +32,7 @@ def dataConvert(configs):
                     'stime': stime, 'etime': etime,
                     'duration': duration, 'words': words}
         
-        if configs.model.name == "MultiTeacher":
+        if configs.model.name.startswith("MultiTeacher"):
             record["t0_logits"] = load_teacher_logist(t0_output, i, vid)
             record["t1_logits"] = load_teacher_logist(t1_output, i, vid)
             record["t2_logits"] = load_teacher_logist(t2_output, i, vid)
@@ -48,7 +47,7 @@ def dataConvert(configs):
                     'stime': stime, 'etime': etime,
                     'duration': duration, 'words': words}
         test_set.append(record)
-    return train_set, test_set  # train/val/test
+    return train_set, test_set
 
 
 

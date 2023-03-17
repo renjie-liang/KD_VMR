@@ -5,3 +5,10 @@ CUDA_VISIBLE_DEVICES=1 python main.py --config ./config/charades/SeqPAN.yaml
 CUDA_VISIBLE_DEVICES=1 python main.py --config ./config/charades/BaseFast.yaml
 CUDA_VISIBLE_DEVICES=1 python main.py --config ./config/charades/SingleTeacher.yaml
 CUDA_VISIBLE_DEVICES=3 python main.py --config ./config/charades/MultiTeacher.yaml
+CUDA_VISIBLE_DEVICES=2 python main.py --config ./config/charades/MultiTeacherPlus.yaml
+
+
+
+CUDA_VISIBLE_DEVICES=1 python main.py --config ./config/anet/SeqPAN.yaml
+CUDA_VISIBLE_DEVICES=2 python main.py --config ./config/anet/BaseFast.yaml
+CUDA_VISIBLE_DEVICES=3 python main.py --config ./config/anet/SingleTeacher.yaml

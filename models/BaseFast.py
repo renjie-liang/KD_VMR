@@ -1,7 +1,7 @@
 import tensorflow as tf
 from models.ops import count_params, create_optimizer
 from models.layers import layer_norm, conv1d, cq_attention, cq_concat, matching_loss, localizing_loss, ans_predictor
-from models.layers import distillation_loss
+from models.lossfunc import *
 from models.modules import word_embs, char_embs, add_pos_embs, conv_block, conditioned_predictor, dual_attn_block
 
 

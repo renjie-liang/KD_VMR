@@ -211,33 +211,3 @@ def my_conv1d(inputs, dim, kernel_size=1, use_bias=False, activation=None, paddi
         outputs = tf.transpose(outputs, [0,2,1])
         return outputs
 
-
-def distillation_loss(slogit_s, elogit_s, slogit_t, elogit_t, mask, temperature):
-    # slogit_s = mask_logits(slogit_s, mask=mask)
-    # elogit_s = mask_logits(elogit_s, mask=mask)
-    # slogit_t = mask_logits(slogit_t, mask=mask)
-    # elogit_t = mask_logits(elogit_t, mask=mask)
-
-
-
-    slogit_s = tf.sigmoid(slogit_s)
-    slogit_s = tf.sigmoid(elogit_s)
-    # slogit_s = tf.nn.softmax(tf.linalg.normalize(slogit_s, axis=1)[0] / temperature, axis=1)
-    # elogit_s = tf.nn.softmax(tf.linalg.normalize(elogit_s, axis=1)[0] / temperature, axis=1)
-
-
-    slogit_t = tf.nn.softmax(tf.linalg.normalize(slogit_t, axis=1)[0] / temperature, axis=1)
-    elogit_t = tf.nn.softmax(tf.linalg.normalize(elogit_t, axis=1)[0] / temperature, axis=1)
-
-    slogit_t, elogit_t = tf.stop_gradient(slogit_t), tf.stop_gradient(elogit_t)
-    sloss = tf.compat.v1.nn.softmax_cross_entropy_with_logits_v2(labels=slogit_t, logits=slogit_s)
-    eloss = tf.compat.v1.nn.softmax_cross_entropy_with_logits_v2(labels=elogit_t, logits=elogit_s)
-    loss = tf.reduce_mean(sloss + eloss)
-    return loss
-
-
-
-    # sloss = tf.nn.l2_loss(slogit_s - slogit_t)
-    # eloss = tf.nn.l2_loss(elogit_s - elogit_t)
-    # sloss = tf.compat.v1.distributions.kl_divergence(slogit_s, slogit_t)
-    # eloss = tf.compat.v1.distributions.kl_divergence(elogit_s, elogit_t)

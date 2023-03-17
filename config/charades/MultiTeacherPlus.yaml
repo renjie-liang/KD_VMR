@@ -16,7 +16,7 @@
     "clip_norm": 1.0
   },
   "model": {
-        name: "MultiTeacher",
+        name: "MultiTeacherPlus",
         max_vlen: 64,
         max_tlen: 20,
         vdim: 1024,
@@ -33,7 +33,10 @@
         no_gumbel: true,
 
         label_kdfunc: "kdfunc_CE",
-        label_cof: 1,
+        inter_kdfunc: "kdfunc_L2",
+        label_cof: 0.1,
+        inter_cof_0: 0.1,
+        inter_cof_1: 0.1,
 
         t0_path: "./results/charades_BAN_train_logits.pkl",
         t0_cof: 1.0,

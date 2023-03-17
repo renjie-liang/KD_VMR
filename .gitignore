@@ -9,7 +9,7 @@ figures/
 # C extensions
 *.so
 data_pkl
-
+logs
 # Distribution / packaging
 .Python
 build/

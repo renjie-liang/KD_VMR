@@ -6,6 +6,7 @@ from models.SeqPAN import SeqPAN
 from models.BaseFast import BaseFast
 from models.SingleTeacher import SingleTeacher
 from models.MultiTeacher import MultiTeacher
+from models.MultiTeacherPlus import MultiTeacherPlus
 
 from utils.data_gen import gen_or_load_dataset
 from utils.data_loader import TrainLoader, TestLoader, TrainNoSuffleLoader, TrainLoaderMultiTeacher
@@ -33,7 +34,8 @@ args = parse_args()
 configs = EasyDict(load_yaml(args.config))
 configs['suffix'] = args.suffix
 
-if configs.model.name == "MultiTeacher":
+
+if configs.model.name.startswith("MultiTeacher"):
     feed_func = get_feed_dict_MultiTeacher
     trainloader_func = TrainLoaderMultiTeacher
 else:
@@ -51,34 +53,27 @@ train_loader = trainloader_func(dataset=dataset['train_set'], visual_features=vi
 test_loader = TestLoader(datasets=dataset, visual_features=visual_features, configs=configs)
 # train_nosuffle_loader = TrainNoSuffleLoader(datasets=dataset['train_set'], visual_features=visual_features, configs=configs)
 
-home_dir = 'ckpt/{}/model_{}'.format(configs.task, str(configs.model.max_vlen))
-if configs.suffix is not None:
-    home_dir += '_' + configs.suffix
-model_dir = os.path.join(home_dir, "model")
-
+model_dir = 'ckpt/{}'.format(configs.task)
+logs_dir = 'logs/{}'.format(configs.task)
+os.makedirs(model_dir, exist_ok=True)
+os.makedirs(logs_dir, exist_ok=True)
+date_str = datetime.now().strftime("%Y%m%d_%H%M%S") 
+log_path = os.path.join(logs_dir, date_str + "_{}.txt".format(configs.model.name))
+             
 if not args.eval:
     eval_period = train_loader.num_batches()
-    if not os.path.exists(model_dir):
-        os.makedirs(model_dir)
-    # if not os.path.exists(log_dir):
-        # os.makedirs(log_dir)
-    # write configs to json file
-    save_json(vars(configs), filename=os.path.join(model_dir, "configs.json"), save_pretty=True)
-    # create model and train
-
+    # save_json(vars(configs), filename=os.path.join(model_dir, "configs.json"), save_pretty=True)
     with tf.Graph().as_default() as graph:
         model = eval(configs.model.name)(configs=configs, graph=graph, word_vectors=dataset['word_vector'])
         sess_config = tf.compat.v1.ConfigProto(allow_soft_placement=True, log_device_placement=False)
         sess_config.gpu_options.allow_growth = True
+        best_r1i7, best_miou = -1.0, -1.0
+        best_r1i7_performance, best_miou_performance = None, None
         with tf.compat.v1.Session(config=sess_config) as sess:
             saver = tf.compat.v1.train.Saver(max_to_keep=3)
-            # writer = tf.compat.v1.summary.FileWriter(log_dir)
             sess.run(tf.compat.v1.global_variables_initializer())
-            best_r1i7 = -1.0
-            date_str = datetime.now().strftime("%Y%m%d_%H%M%S") 
-            score_writer = open(os.path.join(model_dir, date_str + "_{}.txt".format(configs.model.name)), mode="w", encoding="utf-8")
+            score_writer = open(log_path, mode="w", encoding="utf-8")
             score_writer.write(json.dumps(configs))
-            # score_writer.write(str(configs))
             for epoch in range(configs.train.epochs):
                 if epoch < 2:
                     cur_lr = 0.000001
@@ -102,11 +97,10 @@ if not args.eval:
 
                     if global_step % eval_period == 0:  # evaluation
                         r1i3, r1i5, r1i7, mi, value_pairs, score_str = eval_test(
-                            sess=sess, model=model, data_loader=test_loader, epoch=epoch + 1, global_step=global_step, prefix="normal")
+                            sess=sess, model=model, data_loader=test_loader, epoch=epoch + 1, global_step=global_step, prefix="")
                         score_writer.write(score_str)
                         score_writer.flush()
-                        print('\nTEST Epoch: %2d | Step: %5d | r1i3: %.2f | r1i5: %.2f | r1i7: %.2f | mIoU: %.2f' % (
-                            epoch + 1, global_step, r1i3, r1i5, r1i7, mi), flush=True)
+                        print(score_str, flush=True)
 
                         # r1i3, r1i5, r1i7, mi, value_pairs, score_str = eval_test_fast(
                         #     sess=sess, model=model, data_loader=test_loader, epoch=epoch + 1, global_step=global_step, prefix="fast")
@@ -121,6 +115,14 @@ if not args.eval:
                             best_r1i7 = r1i7
                             filename = os.path.join(model_dir, "best_{}.ckpt".format(configs.model.name))
                             saver.save(sess, filename)
+                            best_r1i7_performance = score_str
+                        if mi > best_miou:
+                            best_miou = mi
+                            best_miou_performance = score_str
+                            
+            score_writer.write("\n\nOptimal performance at the highest R1i7 epoch and the highest mIoU epoch.\n")           
+            score_writer.write(best_r1i7_performance)
+            score_writer.write(best_miou_performance)
             score_writer.close()
 
 else:

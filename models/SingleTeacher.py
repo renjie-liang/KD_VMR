@@ -1,7 +1,7 @@
 import tensorflow as tf
 from models.ops import count_params, create_optimizer
 from models.layers import layer_norm, conv1d, cq_attention, cq_concat, matching_loss, localizing_loss, ans_predictor
-from models.layers import distillation_loss
+from models.lossfunc import *
 from models.modules import word_embs, char_embs, add_pos_embs, conv_block, conditioned_predictor, dual_attn_block
 
 
@@ -78,7 +78,7 @@ class SingleTeacher:
                                                          num_heads=self.configs.model.num_heads, drop_rate=self.drop_rate,
                                                          attn_drop=self.drop_rate, max_pos_len=self.configs.model.max_vlen,
                                                          activation=tf.nn.relu, name="fast_predictor")
-        self.fast_loc_loss = localizing_loss(fast_start_logits, fast_end_logits, self.y1, self.y2, v_mask)
+        ss_loc_loss = localizing_loss(fast_start_logits, fast_end_logits, self.y1, self.y2, v_mask)
 
 
         # attention block
@@ -100,7 +100,7 @@ class SingleTeacher:
 
 
         # compute matching loss and matching score
-        self.match_loss, self.match_scores = matching_loss(fuse_feats, self.match_labels, label_size=4, mask=v_mask,
+        t0_match_loss, self.match_scores = matching_loss(fuse_feats, self.match_labels, label_size=4, mask=v_mask,
                                                       gumbel=not self.configs.loss.no_gumbel, tau=self.configs.loss.tau,
                                                       reuse=False)
 
@@ -109,7 +109,7 @@ class SingleTeacher:
         ortho_constraint = tf.multiply(tf.matmul(label_embs, label_embs, transpose_b=True),
                                        1.0 - tf.eye(4, dtype=tf.float32))
         ortho_constraint = tf.norm(tensor=ortho_constraint, ord=2)  # compute l2 norm as loss
-        self.match_loss += ortho_constraint
+        t0_match_loss += ortho_constraint
 
 
         
@@ -123,16 +123,21 @@ class SingleTeacher:
                                                          activation=tf.nn.relu, name="predictor")
 
         # compute localization loss
-        self.loc_loss = localizing_loss(self.start_logits, self.end_logits, self.y1, self.y2, v_mask)
-        std = tf.math.reduce_variance(self.start_logits) + tf.math.reduce_variance(self.end_logits)
-        self.loc_loss = self.loc_loss / std + std
+        t0_loc_loss = localizing_loss(self.start_logits, self.end_logits, self.y1, self.y2, v_mask)
+        # std = tf.math.reduce_variance(self.start_logits) + tf.math.reduce_variance(self.end_logits)
+        # t0_loc_loss = t0_loc_loss / std + std
         
         # self.start_index, self.end_index = ans_predictor(self.start_logits, self.end_logits, v_mask, "slow")
         self.start_index, self.end_index = ans_predictor(fast_start_logits, fast_end_logits, v_mask, "slow")
-        self.w1, self.w2, self.w3, self.w4, self.distillation_loss = distillation_loss(fast_start_logits, fast_end_logits, self.start_logits, self.end_logits, v_mask, temperature = 1.0)
-        # self.distillation_loss = distillation_loss(fast_start_logits, fast_end_logits, self.start_logits, self.end_logits, v_mask, temperature = 1.0)
+        label_kdfunc = eval(self.configs.loss.label_kdfunc)
+        kdloss_t0 = label_kdfunc(fast_start_logits, fast_end_logits, self.start_logits, self.end_logits, v_mask, self.configs.loss.t0_temperature)
+        
+        # ss_loss = ss_loc_loss + self.configs.loss.match_lambda * self.match_loss
+        t0_loss = t0_loc_loss + self.configs.loss.match_lambda * t0_match_loss
+        label_loss = self.configs.loss.t0_cof * kdloss_t0
 
-        self.loss = self.loc_loss + self.configs.loss.match_lambda * self.match_loss \
-                  + self.fast_loc_loss + self.configs.loss.kd_cof * self.distillation_loss 
+        self.loss = ss_loc_loss + t0_loss \
+                  + self.configs.loss.label_cof * label_loss
+
         # create optimizer
         self.train_op = create_optimizer(self.loss, self.lr, clip_norm=self.configs.train.clip_norm)

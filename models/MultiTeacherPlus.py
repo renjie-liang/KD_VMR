@@ -5,7 +5,7 @@ from models.lossfunc import *
 from models.modules import word_embs, char_embs, add_pos_embs, conv_block, conditioned_predictor, dual_attn_block
 
 
-class MultiTeacher:
+class MultiTeacherPlus:
     def __init__(self, configs, graph, word_vectors=None):
         self.configs = configs
         graph = graph if graph is not None else tf.Graph()
@@ -45,19 +45,19 @@ class MultiTeacher:
 
         # text_encoder:: generate query features
         word_emb = word_embs(self.word_ids, dim=self.configs.model.word_dim, drop_rate=self.drop_rate, finetune=False,
-                             reuse=False, vectors=word_vectors)  #(16, 11, 300)
+                             reuse=False, vectors=word_vectors) 
         char_emb = char_embs(self.char_ids, char_size=self.configs.num_chars, dim=self.configs.model.char_dim, reuse=False,
                              kernels=[1, 2, 3, 4], filters=[10, 20, 30, 40], drop_rate=self.drop_rate, padding='VALID',
-                             activation=tf.nn.relu) #(16, 11, 100)
-        word_emb = tf.concat([word_emb, char_emb], axis=-1) ## (16, 11, 400)
+                             activation=tf.nn.relu)
+        word_emb = tf.concat([word_emb, char_emb], axis=-1) 
         qfeats = conv1d(word_emb, dim=self.configs.model.dim, use_bias=True, reuse=False, name='query_conv1d')
-        qfeats = layer_norm(qfeats, reuse=False, name='q_layer_norm') # (16, 11, 300)
+        qfeats = layer_norm(qfeats, reuse=False, name='q_layer_norm')
 
 
         # generate video features
         vfeats = tf.nn.dropout(self.video_inputs, rate=self.drop_rate)
         vfeats = conv1d(vfeats, dim=self.configs.model.dim, use_bias=True, reuse=False, name='video_conv1d')
-        vfeats = layer_norm(vfeats, reuse=False, name='v_layer_norm') # # (16, 64, 300)
+        vfeats = layer_norm(vfeats, reuse=False, name='v_layer_norm') 
 
 
         # add positional embedding and convolutional block
@@ -67,43 +67,54 @@ class MultiTeacher:
         qfeats = add_pos_embs(qfeats, max_pos_len=self.configs.model.max_vlen, reuse=True, name='pos_emb')
         qfeats = conv_block(qfeats, kernel_size=7, dim=self.configs.model.dim, num_layers=4, drop_rate=self.drop_rate,
                             activation=tf.nn.relu, reuse=True, name='conv_block')
+        t0_vfeats, t0_qfeats = vfeats, qfeats
+
+        # teacher attention block
+        for li in range(self.configs.model.attn_layer):
+            vfeats_ = dual_attn_block(t0_vfeats, t0_qfeats, dim=self.configs.model.dim, num_heads=self.configs.model.num_heads,
+                                      from_mask=v_mask, to_mask=q_mask, use_bias=True, drop_rate=self.drop_rate, activation=None, reuse=False, name='t0_d_attn_%d' % li)
+            qfeats_ = dual_attn_block(t0_qfeats, t0_vfeats, dim=self.configs.model.dim, num_heads=self.configs.model.num_heads,
+                                      from_mask=q_mask, to_mask=v_mask, use_bias=True, drop_rate=self.drop_rate, activation=None, reuse=True, name='t0_d_attn_%d' % li)
+            t0_vfeats, t0_qfeats = vfeats_, qfeats_
+
+        t0_q2v_feats, _ = cq_attention(t0_vfeats, t0_qfeats, mask1=v_mask, mask2=q_mask, drop_rate=self.drop_rate, reuse=False, name='t0_q2v_attn')
+        t0_v2q_feats, _ = cq_attention(t0_qfeats, t0_vfeats, mask1=q_mask, mask2=v_mask, drop_rate=self.drop_rate, reuse=False, name='t0_v2q_attn')
+        t0_fuse_feats = cq_concat(t0_q2v_feats, t0_v2q_feats, pool_mask=q_mask, reuse=False, name='t0_cq_cat')
+
+        t0_match_loss, t0_match_scores = matching_loss(t0_fuse_feats, self.match_labels, label_size=4, mask=v_mask,
+                                                      gumbel=not self.configs.loss.no_gumbel, tau=self.configs.loss.tau, reuse=False, name="t0_match_loss")
+        t0_label_embs = tf.compat.v1.get_variable(name='t0_label_emb', shape=[4, self.configs.model.dim], dtype=tf.float32, trainable=True, initializer=tf.compat.v1.orthogonal_initializer())
+        t0_ortho_constraint = tf.multiply(tf.matmul(t0_label_embs, t0_label_embs, transpose_b=True), 1.0 - tf.eye(4, dtype=tf.float32))
+        t0_ortho_constraint = tf.norm(tensor=t0_ortho_constraint, ord=2)
+        t0_match_loss += t0_ortho_constraint
 
 
+        t0_soft_label_embs = tf.matmul(t0_match_scores, tf.tile(tf.expand_dims(t0_label_embs, axis=0), multiples=[tf.shape(t0_match_scores)[0], 1, 1]))
+        t0_outputs = (t0_fuse_feats + t0_soft_label_embs) * tf.cast(tf.expand_dims(v_mask, axis=-1), dtype=tf.float32)
+        t0_start_logits,t0_end_logits = conditioned_predictor(t0_outputs, dim=self.configs.model.dim, reuse=False, mask=v_mask,
+                                                         num_heads=self.configs.model.num_heads, drop_rate=self.drop_rate,
+                                                         attn_drop=self.drop_rate, max_pos_len=self.configs.model.max_vlen,
+                                                         activation=tf.nn.relu, name="t0_predictor")
+        t0_loc_loss = localizing_loss(t0_start_logits, t0_end_logits, self.y1, self.y2, v_mask)
 
-        # attention block
-        # for li in range(self.configs.model.attn_layer):
-        #     vfeats_ = dual_attn_block(vfeats, qfeats, dim=self.configs.model.dim, num_heads=self.configs.model.num_heads,
-        #                               from_mask=v_mask, to_mask=q_mask, use_bias=True, drop_rate=self.drop_rate,
-        #                               activation=None, reuse=False, name='d_attn_%d' % li)
-        #     qfeats_ = dual_attn_block(qfeats, vfeats, dim=self.configs.model.dim, num_heads=self.configs.model.num_heads,
-        #                               from_mask=q_mask, to_mask=v_mask, use_bias=True, drop_rate=self.drop_rate,
-        #                               activation=None, reuse=True, name='d_attn_%d' % li)
-        #     vfeats = vfeats_
-        #     qfeats = qfeats_
         # fuse features
-        q2v_feats, _ = cq_attention(vfeats, qfeats, mask1=v_mask, mask2=q_mask, drop_rate=self.drop_rate,
-                                    reuse=False, name='q2v_attn')
-        v2q_feats, _ = cq_attention(qfeats, vfeats, mask1=q_mask, mask2=v_mask, drop_rate=self.drop_rate,
-                                    reuse=False, name='v2q_attn')
-        fuse_feats = cq_concat(q2v_feats, v2q_feats, pool_mask=q_mask, reuse=False, name='cq_cat')
+        q2v_feats, _ = cq_attention(vfeats, qfeats, mask1=v_mask, mask2=q_mask, drop_rate=self.drop_rate, reuse=False, name='studen_q2v_attn')
+        v2q_feats, _ = cq_attention(qfeats, vfeats, mask1=q_mask, mask2=v_mask, drop_rate=self.drop_rate, reuse=False, name='studen_v2q_attn')
+        fuse_feats = cq_concat(q2v_feats, v2q_feats, pool_mask=q_mask, reuse=False, name='studen_cq_cat')
 
 
         # compute matching loss and matching score
         self.match_loss, self.match_scores = matching_loss(fuse_feats, self.match_labels, label_size=4, mask=v_mask,
-                                                      gumbel=not self.configs.loss.no_gumbel, tau=self.configs.loss.tau,
-                                                      reuse=False)
-
-        label_embs = tf.compat.v1.get_variable(name='label_emb', shape=[4, self.configs.model.dim], dtype=tf.float32,
+                                                      gumbel=not self.configs.loss.no_gumbel, tau=self.configs.loss.tau, reuse=False, name="match_loss")
+        label_embs = tf.compat.v1.get_variable(name='student_label_emb', shape=[4, self.configs.model.dim], dtype=tf.float32,
                                      trainable=True, initializer=tf.compat.v1.orthogonal_initializer())
-        ortho_constraint = tf.multiply(tf.matmul(label_embs, label_embs, transpose_b=True),
-                                       1.0 - tf.eye(4, dtype=tf.float32))
+        ortho_constraint = tf.multiply(tf.matmul(label_embs, label_embs, transpose_b=True), 1.0 - tf.eye(4, dtype=tf.float32))
         ortho_constraint = tf.norm(tensor=ortho_constraint, ord=2)  # compute l2 norm as loss
         self.match_loss += ortho_constraint
 
 
         
-        soft_label_embs = tf.matmul(self.match_scores, tf.tile(tf.expand_dims(label_embs, axis=0),
-                                                          multiples=[tf.shape(input=self.match_scores)[0], 1, 1]))
+        soft_label_embs = tf.matmul(self.match_scores, tf.tile(tf.expand_dims(label_embs, axis=0),  multiples=[tf.shape(input=self.match_scores)[0], 1, 1]))
         outputs = (fuse_feats + soft_label_embs) * tf.cast(tf.expand_dims(v_mask, axis=-1), dtype=tf.float32)
         # compute start and end logits
         self.start_logits, self.end_logits = conditioned_predictor(outputs, dim=self.configs.model.dim, reuse=False, mask=v_mask,
@@ -115,12 +126,10 @@ class MultiTeacher:
         # std = tf.math.reduce_variance(self.start_logits) + tf.math.reduce_variance(self.end_logits)
         # self.loc_loss = self.loc_loss / std + std
         self.start_index, self.end_index = ans_predictor(self.start_logits, self.end_logits, v_mask, "slow")
-        
-        
 
         self.loc_loss = localizing_loss(self.start_logits, self.end_logits, self.y1, self.y2, v_mask)
-        ss_loss = self.loc_loss + self.configs.loss.match_lambda * self.match_loss
 
+        # kdloss_t0 = distillation_loss(self.start_logits, self.end_logits, self.slabels_t0, self.elabels_t0, v_mask, self.configs.loss.t0_temperature)
         label_kdfunc = eval(self.configs.loss.label_kdfunc)
         kdloss_t0 = label_kdfunc(self.start_logits, self.slabels_t0, self.configs.loss.t0_temperature, v_mask) \
                   + label_kdfunc(self.end_logits, self.elabels_t0, self.configs.loss.t0_temperature, v_mask)
@@ -129,11 +138,22 @@ class MultiTeacher:
         kdloss_t2 = label_kdfunc(self.start_logits, self.slabels_t2, self.configs.loss.t2_temperature, v_mask) \
                   + label_kdfunc(self.end_logits, self.elabels_t2, self.configs.loss.t2_temperature, v_mask)
 
+        inter_kdfunc = eval(self.configs.loss.inter_kdfunc)
+        inter_loss_0 = inter_kdfunc(outputs, t0_outputs)
+        inter_loss_1 = inter_kdfunc(fuse_feats, t0_fuse_feats)
+
+
+
+        ss_loss = self.loc_loss + self.configs.loss.match_lambda * self.match_loss
+        t0_loss = t0_loc_loss + self.configs.loss.match_lambda * t0_match_loss
         label_loss = self.configs.loss.t0_cof * kdloss_t0 \
                     + self.configs.loss.t1_cof * kdloss_t1 \
                     + self.configs.loss.t2_cof * kdloss_t2 
+        inter_loss = self.configs.loss.inter_cof_0 * inter_loss_0 + self.configs.loss.inter_cof_1 * inter_loss_1
 
-        self.loss = ss_loss + self.configs.loss.label_cof * label_loss
-
+        self.loss = ss_loss + t0_loss \
+                  + self.configs.loss.label_cof * label_loss \
+                  + inter_loss 
+                    
         # create optimizer
         self.train_op = create_optimizer(self.loss, self.lr, clip_norm=self.configs.train.clip_norm)
